@@ -289,8 +289,7 @@ var expectedNonPartialLLMResponse3ProPreview = []*model.LLMResponse{
 		Partial: false,
 		Content: &genai.Content{
 			Parts: []*genai.Part{
-				genai.NewPartFromText("Here are the results of your additions:\n* 2 + 3 = 5\n* 4 + 5 = 9\n* 6 + 7 = 13"),
-				{}, // empty part with thought signature
+				genai.NewPartFromText("The sums of your requested numbers are:\n* 2 + 3 = 5\n* 4 + 5 = 9\n* 6 + 7 = 13"),
 			},
 			Role: "model",
 		},
@@ -338,8 +337,7 @@ var expectedNonPartialLLMResponse3ProPreview = []*model.LLMResponse{
 		Partial: false,
 		Content: &genai.Content{
 			Parts: []*genai.Part{
-				genai.NewPartFromText("Here are the results for those additions:\n* 10 + 20 = 30\n* 40 + 50 = 90\n* 60 + 70 = 130"),
-				{}, // empty part with thought signature
+				genai.NewPartFromText("The sums of your requested numbers are:\n* 10 + 20 = 30\n* 40 + 50 = 90\n* 60 + 70 = 130"),
 			},
 			Role: "model",
 		},
