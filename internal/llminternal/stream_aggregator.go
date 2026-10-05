@@ -38,10 +38,11 @@ type streamingResponseAggregator struct {
 
 	currentThoughtSignature []byte
 
-	sequence             []*genai.Part
-	currentTextBuffer    string
-	currentTextIsThought bool
-	finishReason         genai.FinishReason
+	sequence                    []*genai.Part
+	currentTextBuffer           string
+	currentTextIsThought        bool
+	currentTextThoughtSignature []byte
+	finishReason                genai.FinishReason
 
 	currentFunctionName             string
 	currentFunctionID               string
@@ -104,6 +105,13 @@ func (s *streamingResponseAggregator) aggregateResponse(llmResponse *model.LLMRe
 		}
 		if len(part.ThoughtSignature) > 0 {
 			s.currentThoughtSignature = part.ThoughtSignature
+		}
+		// Gemini 3 ends streamed text with an empty chunk that carries only the
+		// signature. It belongs to the buffered text: kept as a part of its own
+		// it holds no data, and Vertex rejects requests that replay it.
+		if s.currentTextBuffer != "" && signatureOnly(part) {
+			s.currentTextThoughtSignature = part.ThoughtSignature
+			continue
 		}
 		if part.Text != "" {
 			if s.currentTextBuffer != "" && part.Thought != s.currentTextIsThought {
@@ -409,13 +417,25 @@ func (s *streamingResponseAggregator) flushTextBufferToSequence() {
 	// Check if buffer has content (strings.Builder.Len() is efficient)
 	if s.currentTextBuffer != "" {
 		s.sequence = append(s.sequence, &genai.Part{
-			Text:    s.currentTextBuffer,
-			Thought: s.currentTextIsThought,
+			Text:             s.currentTextBuffer,
+			Thought:          s.currentTextIsThought,
+			ThoughtSignature: s.currentTextThoughtSignature,
 		})
 		// Reset the buffer and the state
 		s.currentTextBuffer = ""
 		s.currentTextIsThought = false
+		s.currentTextThoughtSignature = nil
 	}
+}
+
+// signatureOnly reports whether part carries a thought signature and nothing else.
+func signatureOnly(part *genai.Part) bool {
+	if len(part.ThoughtSignature) == 0 {
+		return false
+	}
+	bare := *part
+	bare.ThoughtSignature = nil
+	return reflect.ValueOf(bare).IsZero()
 }
 
 func (s *streamingResponseAggregator) flushFunctionCallToSequence() {

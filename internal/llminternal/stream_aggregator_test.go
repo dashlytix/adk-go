@@ -1353,3 +1353,75 @@ func TestStreamedArgumentOutOfRangeIndexDropped(t *testing.T) {
 		t.Errorf("assembled arguments\n got %s\nwant %s", args, want)
 	}
 }
+
+// Gemini 3 ends a streamed text answer with an empty chunk that carries only
+// the thought signature. The signature belongs on the aggregated text part:
+// kept as a part of its own it has no data, and Vertex rejects a later request
+// that replays it alongside inline document data with 400 INVALID_ARGUMENT.
+func TestTrailingSignatureOnlyChunkAttachesToText(t *testing.T) {
+	aggregator := llminternal.NewStreamingResponseAggregator()
+	ctx := t.Context()
+
+	testThoughtSignature := []byte("test_signature_text")
+	chunks := []*genai.GenerateContentResponse{
+		{Candidates: []*genai.Candidate{{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "Revenue "}}}}}},
+		{Candidates: []*genai.Candidate{{Content: &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "rose 4%."}}}}}},
+		{Candidates: []*genai.Candidate{{
+			Content:      &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "", ThoughtSignature: testThoughtSignature}}},
+			FinishReason: genai.FinishReasonStop,
+		}}},
+	}
+	for _, chunk := range chunks {
+		for _, err := range aggregator.ProcessResponse(ctx, chunk) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+	}
+
+	finalResponse := aggregator.Close()
+	if finalResponse == nil {
+		t.Fatal("expected final response")
+	}
+	parts := finalResponse.Content.Parts
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d: %+v", len(parts), parts)
+	}
+	if parts[0].Text != "Revenue rose 4%." {
+		t.Errorf("expected aggregated text %q, got %q", "Revenue rose 4%.", parts[0].Text)
+	}
+	if string(parts[0].ThoughtSignature) != string(testThoughtSignature) {
+		t.Errorf("expected text part to carry thought signature %s, got %s", string(testThoughtSignature), string(parts[0].ThoughtSignature))
+	}
+}
+
+// A signature attached to one text part must not leak onto the next.
+func TestTextSignatureDoesNotCarryToNextTextPart(t *testing.T) {
+	aggregator := llminternal.NewStreamingResponseAggregator()
+	ctx := t.Context()
+
+	chunk := &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{
+		Content: &genai.Content{Role: "model", Parts: []*genai.Part{
+			{Text: "planning", Thought: true},
+			{ThoughtSignature: []byte("thought_sig")},
+			{Text: "answer"},
+		}},
+		FinishReason: genai.FinishReasonStop,
+	}}}
+	for _, err := range aggregator.ProcessResponse(ctx, chunk) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	parts := aggregator.Close().Content.Parts
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d: %+v", len(parts), parts)
+	}
+	if !parts[0].Thought || string(parts[0].ThoughtSignature) != "thought_sig" {
+		t.Errorf("expected thought part to carry thought_sig, got %+v", parts[0])
+	}
+	if parts[1].Thought || len(parts[1].ThoughtSignature) > 0 {
+		t.Errorf("expected answer part without signature, got %+v", parts[1])
+	}
+}
